@@ -3,8 +3,9 @@ import * as path from 'path';
 import buildRules, { buildRulesFor } from '../lib/buildRules';
 import Build from '@civ-clone/core-city-build/Rules/Build';
 import FoundsCities from '@civ-clone/base-unit-trait-founds-cities/FoundsCities';
+import NonCombatant from '@civ-clone/base-unit-trait-non-combatant/NonCombatant';
 import Naval from '@civ-clone/base-unit-type-naval/Naval';
-import { Requirement } from '@civ-clone/core-requirement/Requirement';
+import { Requirement, table } from '@civ-clone/core-requirement/Requirement';
 import Rule from '@civ-clone/core-rule/Rule';
 import Unit from '@civ-clone/core-unit/Unit';
 import UnitImprovement from '@civ-clone/core-unit-improvement/UnitImprovement';
@@ -37,21 +38,76 @@ class Veteran extends UnitImprovement {}
 class InciteRevolt {}
 
 describe('buildRules', (): void => {
-  it("gives civ1-unit's Rules/City/build rules, in order, from its entries", (): void => {
-    const civ1 = fixture('civ1-unit-build.json'),
-      entries = civ1.slice(1).map(
-        ([id]) =>
-          new Requirement({
-            id: id as string,
-            subject: Warrior,
-            relation: (id as string).includes('/obsolete/')
-              ? 'obsoletedBy'
-              : 'requires',
-            targets: [Advance],
-          })
-      );
+  it("gives civ1-unit's Rules/City/build rules, in order, from entries made as civ1-unit makes them", (): void => {
+    // civ1-unit's `Requirements`: `table` entries for the units that need an advance, then for those an advance makes
+    //  obsolete, in its order. Only the class names come from civ1-unit; the ids are `table`'s, the rules ours.
+    const named = (name: string): typeof Unit =>
+        ({ [name]: class extends Unit {} }[name]),
+      requires = [
+        'Artillery',
+        'Battleship',
+        'Bomber',
+        'Cannon',
+        'Carrier',
+        'Caravan',
+        'Catapult',
+        'Chariot',
+        'Cruiser',
+        'Diplomat',
+        'Fighter',
+        'Frigate',
+        'Horseman',
+        'Ironclad',
+        'Knight',
+        'MechanizedInfantry',
+        'Musketman',
+        'Nuclear',
+        'Rifleman',
+        'Sail',
+        'Spearman',
+        'Submarine',
+        'Swordman',
+        'Tank',
+        'Transport',
+        'Trireme',
+      ],
+      obsoleted = [
+        'Cannon',
+        'Catapult',
+        'Chariot',
+        'Frigate',
+        'Horseman',
+        'Ironclad',
+        'Knight',
+        'Musketman',
+        'Sail',
+        'Spearman',
+        'Swordman',
+        'Trireme',
+        'Warrior',
+      ],
+      entries = [
+        ...table(
+          'civ1-unit:city/build/requires-advance',
+          'requires',
+          requires.map((name: string): [typeof Unit, typeof Advance] => [
+            named(name),
+            Advance,
+          ])
+        ),
+        ...table(
+          'civ1-unit:city/build/obsolete',
+          'obsoletedBy',
+          obsoleted.map((name: string): [typeof Unit, typeof Later] => [
+            named(name),
+            Later,
+          ])
+        ),
+      ];
 
-    expect(fingerprint(buildRules('civ1-unit', entries))).to.deep.equal(civ1);
+    expect(fingerprint(buildRules('civ1-unit', entries))).to.deep.equal(
+      fixture('civ1-unit-build.json')
+    );
   });
 
   const research = (known: unknown[]) =>
@@ -237,5 +293,129 @@ describe('cityUnitRules', (): void => {
     expect(sizes.get(small)).to.equal(0);
     expect(homes).to.deep.equal([other]);
     expect(unregistered).to.length(1);
+  });
+});
+
+describe('cityUnitRules, the other rules', (): void => {
+  class Phalanx extends Unit {}
+  class Diplomat extends Unit {}
+  class Settlers extends Unit {}
+
+  const traitOf = (UnitType: Function) => (Trait: unknown) =>
+      (UnitType === Diplomat && Trait === NonCombatant) ||
+      (UnitType === Settlers && Trait === FoundsCities),
+    instance = (UnitType: typeof Unit, props = {}) =>
+      Object.assign(Object.create(UnitType.prototype), {
+        hasTrait: traitOf(UnitType),
+        ...props,
+      }),
+    player = {},
+    rulesWith = (deps: object) =>
+      cityUnitRules('game', deps as never, {
+        defenders: [Phalanx, Warrior],
+        homeCity: () => null,
+        lostWithCity: [Veteran],
+        defectingCauses: [InciteRevolt],
+      }),
+    build = (available: Function[], building: Function | null = null) => {
+      const built: Function[] = [];
+
+      return {
+        built,
+        cityBuild: {
+          available: () => available.map((item) => ({ item: () => item })),
+          getAvailable: (item: Function) => available.includes(item),
+          building: () => (building === null ? null : {}),
+          build: (item: Function) => built.push(item),
+          auto: () => false,
+          city: () => ({ player: () => player }),
+        },
+      };
+    };
+
+  it('has a new city build its strongest defender first, if its player asks', (): void => {
+    const { built, cityBuild } = build([Warrior, Phalanx]),
+      [first] = rulesWith({
+        buildPreferencesRegistry: { get: () => ({ firstBuild: true }) },
+        cityBuildRegistry: { getByCity: () => cityBuild },
+      }).created,
+      city = { player: () => player };
+
+    expect(first.validate(city)).to.true;
+    first.process(city);
+    expect(built).to.deep.equal([Phalanx]);
+    expect(
+      rulesWith({
+        buildPreferencesRegistry: { get: () => ({ firstBuild: false }) },
+      }).created[0].validate(city)
+    ).to.false;
+  });
+
+  it('repeats a military unit, but not a Diplomat or Settlers', (): void => {
+    const { built, cityBuild } = build([Phalanx, Diplomat, Settlers]),
+      [repeat] = rulesWith({
+        buildPreferencesRegistry: { get: () => ({ repeat: true }) },
+      }).buildingComplete;
+
+    [Phalanx, Diplomat, Settlers].forEach((UnitType) => {
+      const unit = instance(UnitType);
+
+      if (repeat.validate(cityBuild, unit)) {
+        repeat.process(cityBuild, unit);
+      }
+    });
+
+    expect(built).to.deep.equal([Phalanx]);
+  });
+
+  it('tells the client a size-1 city that isn’t its player’s last is abandoned for Settlers', (): void => {
+    const events: string[] = [],
+      sizes = [1, 1, 2],
+      [, abandoned] = rulesWith({
+        cityGrowthRegistry: { getByCity: () => ({ size: () => sizes[0] }) },
+        cityRegistry: { getByPlayer: () => sizes.slice(1) },
+        engine: { emit: (event: string) => events.push(event) },
+      }).buildingComplete,
+      { cityBuild } = build([]);
+
+    expect(abandoned.validate(cityBuild, instance(Settlers))).to.true;
+    expect(abandoned.validate(cityBuild, instance(Phalanx))).to.false;
+    abandoned.process(cityBuild, instance(Settlers));
+    expect(events).to.deep.equal(['city:abandoned']);
+  });
+
+  it('brings its player’s units on and around an incited city over, but not those in another city', (): void => {
+    const original = {},
+      capturer = {},
+      transferred: string[] = [],
+      unit = (name: string, owner: object) => ({
+        player: () => owner,
+        transfer: () => transferred.push(name),
+      }),
+      squares: Record<string, unknown[]> = {
+        city: [unit('defender', original)],
+        field: [unit('outside', original), unit('foreign', capturer)],
+        town: [unit('in another city', original)],
+      },
+      tile = (name: string) => ({
+        name,
+        getNeighbours: () => [tile('field'), tile('town')],
+      }),
+      [defecting] = rulesWith({
+        cityRegistry: {
+          getByTile: (square: { name: string }) =>
+            square.name === 'town' ? {} : null,
+        },
+        unitRegistry: {
+          getByTile: (square: { name: string }) => squares[square.name],
+        },
+      }).captured,
+      city = { tile: () => tile('city') };
+
+    expect(defecting.validate(city, capturer, original, new InciteRevolt())).to
+      .true;
+    expect(defecting.validate(city, capturer, original, {})).to.false;
+    defecting.process(city, capturer, original);
+    expect(transferred).to.deep.equal(['defender', 'outside']);
   });
 });
