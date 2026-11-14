@@ -419,3 +419,115 @@ describe('cityUnitRules, the other rules', (): void => {
     expect(transferred).to.deep.equal(['defender', 'outside']);
   });
 });
+
+describe('cityUnitRules, the cases that say no', (): void => {
+  class Phalanx extends Unit {}
+  class Settlers extends Unit {}
+
+  const settlers = () =>
+      Object.assign(Object.create(Settlers.prototype), {
+        hasTrait: (Trait: unknown) => Trait === FoundsCities,
+      }),
+    phalanx = () =>
+      Object.assign(Object.create(Phalanx.prototype), {
+        hasTrait: () => false,
+      }),
+    options = {
+      defenders: [Phalanx],
+      homeCity: () => null,
+      lostWithCity: [],
+      defectingCauses: [],
+    },
+    cityBuild = ({
+      building = false,
+      auto = false,
+      available = [Phalanx] as Function[],
+    } = {}) => {
+      const built: Function[] = [];
+
+      return {
+        built,
+        cityBuild: {
+          available: () => available.map((item) => ({ item: () => item })),
+          getAvailable: (item: Function) => available.includes(item),
+          building: () => (building ? {} : null),
+          build: (item: Function) => built.push(item),
+          auto: () => auto,
+          city: () => ({ player: () => ({}) }),
+        },
+      };
+    };
+
+  it("keeps a size-1 city that is its player's last: Settlers there cost nothing", (): void => {
+    const shrink = (size: number, cities: number) =>
+      cityUnitRules(
+        'game',
+        {
+          cityGrowthRegistry: { getByCity: () => ({ size: () => size }) },
+          cityRegistry: { getByPlayer: () => new Array(cities).fill({}) },
+        } as never,
+        options
+      ).buildingComplete[2].validate(cityBuild().cityBuild, settlers());
+
+    expect(shrink(1, 1)).to.false;
+    expect(shrink(2, 1)).to.true;
+    expect(shrink(1, 2)).to.true;
+  });
+
+  it('abandons only a size-1 city, only for Settlers, and never the last', (): void => {
+    const abandoned = (size: number, cities: number, unit = settlers()) =>
+      cityUnitRules(
+        'game',
+        {
+          cityGrowthRegistry: { getByCity: () => ({ size: () => size }) },
+          cityRegistry: { getByPlayer: () => new Array(cities).fill({}) },
+        } as never,
+        options
+      ).buildingComplete[1].validate(cityBuild().cityBuild, unit);
+
+    expect(abandoned(1, 2)).to.true;
+    expect(abandoned(2, 2)).to.false;
+    expect(abandoned(1, 1)).to.false;
+    expect(abandoned(1, 2, phalanx())).to.false;
+  });
+
+  it("doesn't repeat a unit without the preference, under the governor, or while building something else", (): void => {
+    const repeated = (repeat: boolean, setUp: object) => {
+      const { built, cityBuild: build } = cityBuild(setUp),
+        [rule] = cityUnitRules(
+          'game',
+          { buildPreferencesRegistry: { get: () => ({ repeat }) } } as never,
+          options
+        ).buildingComplete,
+        unit = phalanx();
+
+      if (rule.validate(build, unit)) {
+        rule.process(build, unit);
+      }
+
+      return built;
+    };
+
+    expect(repeated(true, {})).to.deep.equal([Phalanx]);
+    expect(repeated(false, {})).to.deep.equal([]);
+    expect(repeated(true, { auto: true })).to.deep.equal([]);
+    expect(repeated(true, { building: true })).to.deep.equal([]);
+    expect(repeated(true, { available: [] })).to.deep.equal([]);
+  });
+
+  it('builds no first defender in a city already building something', (): void => {
+    const { built, cityBuild: build } = cityBuild({ building: true }),
+      [first] = cityUnitRules(
+        'game',
+        {
+          buildPreferencesRegistry: { get: () => ({ firstBuild: true }) },
+          cityBuildRegistry: { getByCity: () => build },
+        } as never,
+        options
+      ).created;
+
+    first.process({ player: () => ({}) });
+
+    expect(built).to.deep.equal([]);
+  });
+});
