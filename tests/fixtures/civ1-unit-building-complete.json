@@ -1,0 +1,5 @@
+[
+  ["civ1-unit:city/building-complete/repeat-military-unit", "BuildingComplete", 1000, 1],
+  ["civ1-unit:city/building-complete/abandoned", "BuildingComplete", 1000, 1],
+  ["civ1-unit:city/building-complete/settlers-shrink-city", "BuildingComplete", 2000, 2]
+]
