@@ -1,6 +1,6 @@
 {
   "name": "@civ-clone/base-unit-build",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A ruleset's rules about building units: which units a city may build (from requirement entries, ships on the coast), and its city rules about units (a first defender, repeating, Settlers costing a citizen, defecting units).",
   "repository": "git@github.com:civ-clone/base-unit-build.git",
   "keywords": [
